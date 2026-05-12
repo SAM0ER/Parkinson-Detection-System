@@ -1,0 +1,18 @@
+# Python مؤقتات
+__pycache__/
+*.py[cod]
+*$py.class
+
+# البيئة الافتراضية (مهم جداً)
+venv/
+.env/
+env/
+
+# ملفات التوزيع والتحميل
+dist/
+build/
+*.egg-info/
+
+# ملفات نظام التشغيل
+.DS_Store
+Thumbs.db
