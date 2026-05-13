@@ -115,8 +115,8 @@ div[data-testid="stSidebar"] {
 @st.cache_resource
 def load_models():
     try:
-        best_model = joblib.load("best_model.pkl")          # Extra Trees pipeline
-        rf_model   = joblib.load("random_forest_model.pkl") # Random Forest pipeline
+        best_model = joblib.load("best_model.pkl")
+        rf_model   = joblib.load("random_forest_model.pkl")
         return best_model, rf_model, True
     except Exception as e:
         return None, None, False
@@ -163,7 +163,7 @@ FEATURE_DESCRIPTIONS = {
 
 
 # ══════════════════════════════════════════════════
-#  FEATURE EXTRACTION — PRAAT
+#  FEATURE EXTRACTION — PRAAT ONLY
 # ══════════════════════════════════════════════════
 def extract_features_praat(audio_path):
     try:
@@ -177,6 +177,7 @@ def extract_features_praat(audio_path):
             return None, "Could not detect voice pitch. Please speak clearly and try again."
 
         point_process = call(sound, "To PointProcess (periodic, cc)", 75, 600)
+
         jitter_pct = call(point_process, "Get jitter (local)",           0, 0, 0.0001, 0.02, 1.3)
         jitter_abs = call(point_process, "Get jitter (local, absolute)", 0, 0, 0.0001, 0.02, 1.3)
         rap        = call(point_process, "Get jitter (rap)",             0, 0, 0.0001, 0.02, 1.3)
@@ -194,6 +195,8 @@ def extract_features_praat(audio_path):
         hnr = call(harmonicity, "Get mean", 0, 0)
         nhr = 1.0 / hnr if hnr > 0 else 0.5
 
+        # Nonlinear measures (RPDE, DFA, spread1, spread2, D2, PPE)
+        # These are computed via librosa approximations since no direct Praat equivalent exists
         y, sr = librosa.load(audio_path, sr=None)
         mfcc    = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
         rpde    = float(np.clip(np.std(mfcc[0]) / (np.mean(np.abs(mfcc[0])) + 1e-6), 0.25, 0.85))
@@ -222,82 +225,14 @@ def extract_features_praat(audio_path):
         return None, f"Praat error: {str(e)}"
 
 
-# ══════════════════════════════════════════════════
-#  FEATURE EXTRACTION — LIBROSA (fallback)
-# ══════════════════════════════════════════════════
-def extract_features_librosa(audio_path):
-    try:
-        y, sr = librosa.load(audio_path, sr=None)
-        f0, voiced_flag, _ = librosa.pyin(
-            y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))
-        f0_values = f0[voiced_flag]
-
-        if len(f0_values) < 5:
-            return None, "Audio too short or no clear voice detected."
-
-        fo  = np.mean(f0_values)
-        fhi = np.max(f0_values)
-        flo = np.min(f0_values)
-
-        periods    = 1.0 / f0_values
-        diffs      = np.abs(np.diff(periods))
-        avg_period = np.mean(periods)
-
-        jitter_pct = (np.mean(diffs) / avg_period) * 100
-        jitter_abs = np.mean(diffs) * 1000
-        rap = np.mean([np.abs(periods[i] - np.mean(periods[max(0,i-1):i+2]))
-                       for i in range(1, len(periods)-1)]) / avg_period
-        ppq = np.mean([np.abs(periods[i] - np.mean(periods[max(0,i-2):i+3]))
-                       for i in range(2, len(periods)-2)]) / avg_period
-        ddp = 3 * rap
-
-        rms       = librosa.feature.rms(y=y)[0]
-        rms_vals  = rms[rms > 0] if np.any(rms > 0) else rms + 1e-10
-        amp_diffs = np.abs(np.diff(rms_vals))
-        avg_amp   = np.mean(rms_vals)
-        shimmer    = np.mean(amp_diffs) / avg_amp if avg_amp > 0 else 0
-        shimmer_db = 20 * np.log10(1 + shimmer) if shimmer > 0 else 0
-        apq3       = shimmer * 0.7
-        apq5       = shimmer * 0.85
-        mdvp_apq   = shimmer * 0.95
-        dda        = 3 * apq3
-
-        stft = np.abs(librosa.stft(y))
-        harmonic, percussive = librosa.decompose.hpss(stft)
-        h_energy = np.mean(harmonic**2)
-        p_energy = np.mean(percussive**2)
-        hnr = 10 * np.log10(h_energy / (p_energy + 1e-10) + 1e-10)
-        nhr = 1.0 / (hnr + 1e-6) if hnr > 0 else 0.5
-
-        mfcc    = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        rpde    = float(np.clip(np.std(mfcc[0]) / (np.mean(np.abs(mfcc[0])) + 1e-6), 0.25, 0.85))
-        zcr     = librosa.feature.zero_crossing_rate(y)[0]
-        dfa     = float(np.clip(np.mean(zcr) * 10, 0.5, 0.9))
-        sc      = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-        spread1 = float(-np.clip(np.std(sc) / 100, 3, 8))
-        spread2 = float( np.clip(np.mean(sc) / 5000, 0.1, 0.5))
-        chroma  = librosa.feature.chroma_stft(y=y, sr=sr)
-        d2      = float(np.clip(np.std(chroma), 1.5, 3.5))
-        ppe     = float(np.clip(np.std(f0_values) / fo, 0.05, 0.6))
-
-        features = np.array([
-            fo, fhi, flo,
-            jitter_pct, jitter_abs, rap, ppq, ddp,
-            shimmer, shimmer_db, abs(apq3), abs(apq5), abs(mdvp_apq), abs(dda),
-            abs(nhr), hnr,
-            rpde, dfa, spread1, spread2, d2, ppe
-        ], dtype=np.float64)
-        return features, None
-    except Exception as e:
-        return None, f"Error processing file: {str(e)}"
-
-
 def extract_features_from_audio(audio_path):
-    if PRAAT_AVAILABLE:
-        features, error = extract_features_praat(audio_path)
-        if features is not None:
-            return features, None
-    return extract_features_librosa(audio_path)
+    if not PRAAT_AVAILABLE:
+        return None, (
+            "❌ Praat (parselmouth) is not installed.\n\n"
+            "Run: pip install praat-parselmouth\n\n"
+            "Praat is required for accurate voice feature extraction."
+        )
+    return extract_features_praat(audio_path)
 
 
 # ══════════════════════════════════════════════════
@@ -335,8 +270,7 @@ def plot_waveform(audio_path):
 
 
 # ══════════════════════════════════════════════════
-#  PREDICT  — Extra Trees (best) + Random Forest
-#  Both pipelines already include scaler + SMOTE
+#  PREDICT — Extra Trees + Random Forest
 # ══════════════════════════════════════════════════
 def predict(features):
     if not models_loaded:
@@ -345,7 +279,6 @@ def predict(features):
     features_2d = features.reshape(1, -1)
     results = {}
 
-    # ── Extra Trees ──────────────────────────────
     try:
         et_pred  = best_model.predict(features_2d)[0]
         et_proba = best_model.predict_proba(features_2d)[0]
@@ -357,7 +290,6 @@ def predict(features):
     except Exception as e:
         results['Extra Trees'] = {'error': str(e)}
 
-    # ── Random Forest ────────────────────────────
     try:
         rf_pred  = rf_model.predict(features_2d)[0]
         rf_proba = rf_model.predict_proba(features_2d)[0]
@@ -397,8 +329,7 @@ def generate_pdf_report(patient_name, features, results, method):
     pdf.cell(0, 8, f"Name: {patient_name if patient_name else 'Anonymous'}", ln=True)
     pdf.cell(0, 8, f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
     pdf.cell(0, 8, f"Analysis Method: {method}", ln=True)
-    engine = "Praat (parselmouth)" if PRAAT_AVAILABLE else "librosa"
-    pdf.cell(0, 8, f"Feature Extraction Engine: {engine}", ln=True)
+    pdf.cell(0, 8, "Feature Extraction Engine: Praat (parselmouth)", ln=True)
     pdf.ln(5)
 
     pdf.set_font('Arial', 'B', 14)
@@ -463,9 +394,11 @@ with st.sidebar:
     st.divider()
     st.markdown("### 🔬 Feature Engine")
     if PRAAT_AVAILABLE:
-        st.success("✅ Praat (High Accuracy)")
+        st.success("✅ Praat (parselmouth) — Ready")
     else:
-        st.warning("⚠️ librosa (Basic)\n\nFor better accuracy:\n`pip install praat-parselmouth`")
+        st.error("❌ Praat not installed — Audio analysis unavailable")
+        st.code("pip install praat-parselmouth", language="bash")
+        st.warning("Install Praat to enable audio and live recording modes.")
 
     st.divider()
     st.markdown("### 🗂️ Select Mode")
@@ -529,7 +462,6 @@ def show_results(results, features, method):
             </div><br>
             """, unsafe_allow_html=True)
 
-    # ── Comparison chart ─────────────────────────
     st.markdown('<div class="section-title">📊 Model Comparison</div>', unsafe_allow_html=True)
     models_list     = [m for m in results if 'error' not in results[m]]
     healthy_probs   = [100 - results[m]['parkinson_prob'] for m in models_list]
@@ -557,7 +489,6 @@ def show_results(results, features, method):
     st.pyplot(fig2)
     plt.close()
 
-    # ── Features table ───────────────────────────
     with st.expander("🔬 View Extracted Features"):
         df_feat = pd.DataFrame({
             'Feature':     FEATURE_NAMES,
@@ -566,7 +497,6 @@ def show_results(results, features, method):
         })
         st.dataframe(df_feat, use_container_width=True, height=400)
 
-    # ── PDF download ─────────────────────────────
     st.markdown('<div class="section-title">📄 Download Report</div>', unsafe_allow_html=True)
     pdf_bytes = generate_pdf_report(patient_name, features, results, method)
     st.download_button(
@@ -583,138 +513,141 @@ def show_results(results, features, method):
 if mode == "🎤 Upload Audio":
     st.markdown('<div class="section-title">🎤 Upload Audio File for Analysis</div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Upload WAV or MP3 file",
-            type=['wav', 'mp3', 'ogg', 'flac'],
-            help="Recommended: record a sustained 'Aah' vowel for 3-5 seconds"
-        )
-        engine_label = "Praat (High Accuracy)" if PRAAT_AVAILABLE else "librosa (Basic)"
-        st.markdown(f"""
-        <div class="feature-info">
-        💡 <b>Recording tip:</b><br>
-        Record the vowel "Aah" for 3-5 seconds in a steady, continuous voice.<br><br>
-        🔬 <b>Feature Engine:</b> {engine_label}
-        </div>
-        """, unsafe_allow_html=True)
+    if not PRAAT_AVAILABLE:
+        st.error("❌ Praat (parselmouth) is not installed. Audio analysis is unavailable.")
+        st.code("pip install praat-parselmouth", language="bash")
+    else:
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Upload WAV or MP3 file",
+                type=['wav', 'mp3', 'ogg', 'flac'],
+                help="Recommended: record a sustained 'Aah' vowel for 3-5 seconds"
+            )
+            st.markdown("""
+            <div class="feature-info">
+            💡 <b>Recording tip:</b><br>
+            Record the vowel "Aah" for 3-5 seconds in a steady, continuous voice.<br><br>
+            🔬 <b>Feature Engine:</b> Praat (parselmouth) — High Accuracy
+            </div>
+            """, unsafe_allow_html=True)
 
-    with col2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">22</div>
-            <div class="metric-label">Features extracted automatically</div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">2</div>
-            <div class="metric-label">AI models for comparison</div>
-        </div>
-        """, unsafe_allow_html=True)
+        with col2:
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">22</div>
+                <div class="metric-label">Features extracted automatically</div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+            <div class="metric-card">
+                <div class="metric-value">2</div>
+                <div class="metric-label">AI models for comparison</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    if uploaded_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = tmp.name
+        if uploaded_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp:
+                tmp.write(uploaded_file.getvalue())
+                tmp_path = tmp.name
 
-        st.audio(uploaded_file)
+            st.audio(uploaded_file)
 
-        if st.button("🔍 Analyze & Predict", type="primary"):
-            with st.spinner("⏳ Extracting voice features..."):
-                features, error = extract_features_from_audio(tmp_path)
+            if st.button("🔍 Analyze & Predict", type="primary"):
+                with st.spinner("⏳ Extracting voice features via Praat..."):
+                    features, error = extract_features_from_audio(tmp_path)
 
-            if error:
-                st.error(f"❌ {error}")
-            else:
-                st.markdown('<div class="section-title">📈 Voice Signal Analysis</div>',
-                            unsafe_allow_html=True)
-                with st.spinner("Plotting waveform..."):
-                    fig = plot_waveform(tmp_path)
-                    st.pyplot(fig)
-                    plt.close()
-                with st.spinner("🤖 Running prediction models..."):
-                    results = predict(features)
-                show_results(results, features, "Audio File Upload")
+                if error:
+                    st.error(f"❌ {error}")
+                else:
+                    st.markdown('<div class="section-title">📈 Voice Signal Analysis</div>',
+                                unsafe_allow_html=True)
+                    with st.spinner("Plotting waveform..."):
+                        fig = plot_waveform(tmp_path)
+                        st.pyplot(fig)
+                        plt.close()
+                    with st.spinner("🤖 Running prediction models..."):
+                        results = predict(features)
+                    show_results(results, features, "Audio File Upload")
 
-        os.unlink(tmp_path)
+            os.unlink(tmp_path)
 
 
 # ══════════════════════════════════════════════════
 #  MODE: LIVE RECORDING
 # ══════════════════════════════════════════════════
 elif mode == "🎙️ Live Recording":
-
     st.markdown(
         '<div class="section-title">🎙️ Live Microphone Recording</div>',
         unsafe_allow_html=True
     )
 
-    col1, col2 = st.columns(2)
+    if not PRAAT_AVAILABLE:
+        st.error("❌ Praat (parselmouth) is not installed. Audio analysis is unavailable.")
+        st.code("pip install praat-parselmouth", language="bash")
+    else:
+        col1, col2 = st.columns(2)
 
-    with col1:
-        duration = st.slider(
-            "⏱️ Recommended Recording Duration (seconds)",
-            min_value=3,
-            max_value=10,
-            value=5
+        with col1:
+            duration = st.slider(
+                "⏱️ Recommended Recording Duration (seconds)",
+                min_value=3,
+                max_value=10,
+                value=5
+            )
+
+        with col2:
+            st.markdown("""
+            <div class="feature-info">
+            🎤 <b>Recording Instructions:</b><br>
+            1. Click "Start Recording"<br>
+            2. Say "Aah" in a steady, continuous voice<br>
+            3. Click "Stop Recording"<br>
+            4. Analysis starts automatically
+            </div>
+            """, unsafe_allow_html=True)
+
+        audio = mic_recorder(
+            start_prompt="🔴 Start Recording",
+            stop_prompt="⏹️ Stop Recording",
+            just_once=True,
+            use_container_width=True
         )
 
-    with col2:
-        st.markdown("""
-        <div class="feature-info">
-        🎤 <b>Recording Instructions:</b><br>
-        1. Click "Start Recording"<br>
-        2. Say "Aah" in a steady, continuous voice<br>
-        3. Click "Stop Recording"<br>
-        4. Analysis starts automatically
-        </div>
-        """, unsafe_allow_html=True)
+        if audio:
+            audio_bytes = audio["bytes"]
 
-    audio = mic_recorder(
-        start_prompt="🔴 Start Recording",
-        stop_prompt="⏹️ Stop Recording",
-        just_once=True,
-        use_container_width=True
-    )
+            audio_segment = AudioSegment.from_file(
+                io.BytesIO(audio_bytes),
+                format="webm"
+            )
 
-    if audio:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp_path = tmp.name
+                audio_segment.export(tmp_path, format="wav")
 
-        audio_bytes = audio["bytes"]
+            st.audio(audio_bytes, format="audio/webm")
 
-        audio_segment = AudioSegment.from_file(
-            io.BytesIO(audio_bytes),
-            format="webm"
-        )
+            status_text = st.empty()
+            status_text.markdown("✅ **Recording done!** Analyzing...")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            tmp_path = tmp.name
-            audio_segment.export(tmp_path, format="wav")
+            with st.spinner("📈 Processing waveform..."):
+                fig = plot_waveform(tmp_path)
+                st.pyplot(fig)
+                plt.close()
 
-        st.audio(audio_bytes, format="audio/webm")
+            with st.spinner("⏳ Extracting voice features via Praat..."):
+                features, error = extract_features_from_audio(tmp_path)
 
-        status_text = st.empty()
-        status_text.markdown("✅ **Recording done!** Analyzing...")
+            if error:
+                st.error(f"❌ {error}")
+            else:
+                with st.spinner("🤖 Running prediction models..."):
+                    results = predict(features)
+                show_results(results, features, "Live Microphone Recording")
 
-        with st.spinner("📈 Processing waveform..."):
-            fig = plot_waveform(tmp_path)
-            st.pyplot(fig)
-            plt.close()
-
-        with st.spinner("⏳ Extracting voice features..."):
-            features, error = extract_features_from_audio(tmp_path)
-
-        if error:
-            st.error(f"❌ {error}")
-
-        else:
-            with st.spinner("🤖 Running prediction models..."):
-                results = predict(features)
-
-            show_results(results, features, "Live Microphone Recording")
-
-        os.unlink(tmp_path)
+            os.unlink(tmp_path)
 
 
 # ══════════════════════════════════════════════════
