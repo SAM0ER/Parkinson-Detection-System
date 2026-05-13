@@ -394,7 +394,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### 🔬 Feature Engine")
     if PRAAT_AVAILABLE:
-        st.success("✅ Praat (parselmouth) — Ready")
+        st.success("✅ Praat (parselmouth) — (High Acc) Ready")
     else:
         st.error("❌ Praat not installed — Audio analysis unavailable")
         st.code("pip install praat-parselmouth", language="bash")
