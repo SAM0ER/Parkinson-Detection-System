@@ -681,40 +681,40 @@ elif mode == "🎙️ Live Recording":
 
     if audio:
 
-    audio_bytes = audio["bytes"]
+        audio_bytes = audio["bytes"]
 
-    audio_segment = AudioSegment.from_file(
-        io.BytesIO(audio_bytes),
-        format="webm"
-    )
+        audio_segment = AudioSegment.from_file(
+            io.BytesIO(audio_bytes),
+            format="webm"
+        )
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        tmp_path = tmp.name
-        audio_segment.export(tmp_path, format="wav")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp_path = tmp.name
+            audio_segment.export(tmp_path, format="wav")
 
-    st.audio(audio_bytes, format="audio/webm")
+        st.audio(audio_bytes, format="audio/webm")
 
-    status_text = st.empty()
-    status_text.markdown("✅ **Recording done!** Analyzing...")
+        status_text = st.empty()
+        status_text.markdown("✅ **Recording done!** Analyzing...")
 
-    with st.spinner("📈 Processing waveform..."):
-        fig = plot_waveform(tmp_path)
-        st.pyplot(fig)
-        plt.close()
+        with st.spinner("📈 Processing waveform..."):
+            fig = plot_waveform(tmp_path)
+            st.pyplot(fig)
+            plt.close()
 
-    with st.spinner("⏳ Extracting voice features..."):
-        features, error = extract_features_from_audio(tmp_path)
+        with st.spinner("⏳ Extracting voice features..."):
+            features, error = extract_features_from_audio(tmp_path)
 
-    if error:
-        st.error(f"❌ {error}")
+        if error:
+            st.error(f"❌ {error}")
 
-    else:
-        with st.spinner("🤖 Running prediction models..."):
-            results = predict(features)
+        else:
+            with st.spinner("🤖 Running prediction models..."):
+                results = predict(features)
 
-        show_results(results, features, "Live Microphone Recording")
+            show_results(results, features, "Live Microphone Recording")
 
-    os.unlink(tmp_path)
+        os.unlink(tmp_path)
 
 
 # ══════════════════════════════════════════════════
