@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 from streamlit_mic_recorder import mic_recorder
 matplotlib.use('Agg')
+from pydub import AudioSegment
+import io
 import os
 import tempfile
 from fpdf import FPDF
@@ -679,33 +681,40 @@ elif mode == "🎙️ Live Recording":
 
     if audio:
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-            tmp.write(audio["bytes"])
-            tmp_path = tmp.name
+    audio_bytes = audio["bytes"]
 
-        st.audio(audio["bytes"], format="audio/wav")
+    audio_segment = AudioSegment.from_file(
+        io.BytesIO(audio_bytes),
+        format="webm"
+    )
 
-        status_text = st.empty()
-        status_text.markdown("✅ **Recording done!** Analyzing...")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp_path = tmp.name
+        audio_segment.export(tmp_path, format="wav")
 
-        with st.spinner("📈 Processing waveform..."):
-            fig = plot_waveform(tmp_path)
-            st.pyplot(fig)
-            plt.close()
+    st.audio(audio_bytes, format="audio/webm")
 
-        with st.spinner("⏳ Extracting voice features..."):
-            features, error = extract_features_from_audio(tmp_path)
+    status_text = st.empty()
+    status_text.markdown("✅ **Recording done!** Analyzing...")
 
-        if error:
-            st.error(f"❌ {error}")
+    with st.spinner("📈 Processing waveform..."):
+        fig = plot_waveform(tmp_path)
+        st.pyplot(fig)
+        plt.close()
 
-        else:
-            with st.spinner("🤖 Running prediction models..."):
-                results = predict(features)
+    with st.spinner("⏳ Extracting voice features..."):
+        features, error = extract_features_from_audio(tmp_path)
 
-            show_results(results, features, "Live Microphone Recording")
+    if error:
+        st.error(f"❌ {error}")
 
-        os.unlink(tmp_path)
+    else:
+        with st.spinner("🤖 Running prediction models..."):
+            results = predict(features)
+
+        show_results(results, features, "Live Microphone Recording")
+
+    os.unlink(tmp_path)
 
 
 # ══════════════════════════════════════════════════
